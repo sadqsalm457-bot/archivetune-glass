@@ -1,0 +1,106 @@
+name: Build ArchiveTune Liquid Glass
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "release = same app id (uninstall old app first) | debug = installs next to old app"
+        type: choice
+        default: release
+        options:
+          - release
+          - debug
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      - name: Checkout this repo (contains the overlay zip)
+        uses: actions/checkout@v7
+
+      - name: Clone upstream ArchiveTune 15.1.0 with submodules
+        shell: bash
+        run: |
+          for repo in rukamori/ArchiveTune koiverse/ArchiveTune; do
+            for tag in 15.1.0 v15.1.0; do
+              if git clone --branch "$tag" --recurse-submodules "https://github.com/$repo.git" src; then
+                echo "Cloned $repo @ $tag"
+                exit 0
+              fi
+              rm -rf src
+            done
+          done
+          echo "Could not clone upstream source"
+          exit 1
+
+      - name: Apply the liquid glass changes
+        shell: bash
+        run: |
+          unzip -o ArchiveTune-liquidglass-changed-files.zip -d src
+          ls src/app/src/main/kotlin/moe/rukamori/archivetune/ui/glass
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Generate translation contributor credits
+        working-directory: src
+        run: python scripts/generate_translation_contributors.py
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Create a personal signing key
+        if: inputs.build_type == 'release'
+        working-directory: src
+        shell: bash
+        run: |
+          mkdir -p app/keystore
+          keytool -genkeypair -keystore app/keystore/release.keystore \
+            -alias mykey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass changeit123 -keypass changeit123 \
+            -dname "CN=ArchiveTune Glass"
+
+      - name: Build APK
+        working-directory: src
+        shell: bash
+        env:
+          STORE_PASSWORD: changeit123
+          KEY_ALIAS: mykey
+          KEY_PASSWORD: changeit123
+        run: |
+          chmod +x gradlew
+          if [ "${{ inputs.build_type }}" = "debug" ]; then
+            TASK=assembleGmsMobileArm64Debug
+          else
+            TASK=assembleGmsMobileArm64Release
+          fi
+          ./gradlew "$TASK" --stacktrace 2>&1 | tee build.log
+
+      - name: Show only the errors (if the build failed)
+        if: failure()
+        working-directory: src
+        shell: bash
+        run: |
+          {
+            echo "## Build errors"
+            echo '```'
+            grep -E "^e: |error:|What went wrong|FAILED|Execution failed" build.log | head -60 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ArchiveTune-glass-apk
+          path: src/app/build/outputs/apk/**/*.apk
