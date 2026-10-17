@@ -11,6 +11,9 @@ on:
           - release
           - debug
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -104,3 +107,16 @@ jobs:
         with:
           name: ArchiveTune-glass-apk
           path: src/app/build/outputs/apk/**/*.apk
+
+      - name: Publish APK as a Release (direct download, no zip)
+        working-directory: src
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          cp "$APK" "ArchiveTune-glass-${{ inputs.build_type }}.apk"
+          gh release create "glass-${{ github.run_number }}" "ArchiveTune-glass-${{ inputs.build_type }}.apk" \
+            --repo "${{ github.repository }}" \
+            --title "Liquid Glass build #${{ github.run_number }}" \
+            --notes "Unofficial modified build of ArchiveTune 15.1.0"
